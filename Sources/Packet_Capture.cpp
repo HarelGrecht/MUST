@@ -1,116 +1,93 @@
-#include "../Includes/Global_Defines.hpp"
 #include "../Includes/Packet_Capture.hpp"
+#include "../Includes/Global_Defines.hpp"
 
 #include <cstring>
-#include <netinet/in.h>
-#include <sys/ioctl.h>
-#include <sys/socket.h>
-#include <unistd.h>
-#include <net/if.h>
 #include <iostream>
-#include <stdexcept>
+#include <thread>
+#include <vector>
 
+
+
+/*
+if MOCK_UP is defined:
+    ifndef blocks are ignored
+    ifdef blocks are include
+if MOCK_IP is not defined:
+    ifndef blocks are included
+    ifdef blocks are ignored
+*/
 Queue PacketCapture::ReciveQueue;
 
 PacketCapture::PacketCapture(const std::string& device, std::string IpAddress) : Device(device), IpAddress(IpAddress) {
-    SetIPAddress(Device,IpAddress);
+#ifndef MOCK_UP
+    SetIPAddress(Device, IpAddress);
+#endif
 }
 
 PacketCapture::~PacketCapture() {
+#ifndef MOCK_UP
     if (NetworkDescriptor != nullptr)
         pcap_close(NetworkDescriptor);
+#endif
 }
 
-bool PacketCapture::SetIPAddress(const std::string& device, const std::string& IpAddress) {
-    int sockfd = socket(AF_INET, SOCK_DGRAM, 0);
-    if (sockfd < 0){
-        std::cerr << "Failed to create a socket for setting IP address" << std::endl;
-        return false;
+#ifdef MOCK_UP
+// Mock-up function to inject fake packets
+void PacketCapture::InjectFakePackets() {
+    std::cout << "MOCK_UP: Injecting fake packets..." << std::endl;
+    while (true) {  // Simulate continuous packet reception
+        uint8_t fakePacket[PACKET_SIZE] = {0};
+
+        // Fill the packet with dummy data (example: incrementing byte values)
+        for (size_t i = 0; i < PACKET_SIZE; ++i) {
+            fakePacket[i] = i % 256;
+        }
+
+        // Enqueue the fake packet into the receiving queue
+        if (ReciveQueue.enqueue(fakePacket, PACKET_SIZE)) {
+            std::cout << "MOCK_UP: Injected fake packet of size " << PACKET_SIZE << " bytes into the queue." << std::endl;
+        } else {
+            std::cerr << "MOCK_UP: Failed to enqueue fake packet. Queue might be full." << std::endl;
+        }
+
+        std::this_thread::sleep_for(std::chrono::milliseconds(100));  // Simulate packet arrival every 100 ms
     }
-
-    struct ifreq ifr;
-    memset(&ifr, 0, sizeof(ifr));
-    strncpy(ifr.ifr_name, device.c_str(), MAX_INTERFACE_NAME_LENGTH);
-    
-    struct sockaddr_in addr;
-    addr.sin_family = AF_INET;
-    addr.sin_port = 0;
-
-    if (inet_pton(AF_INET, ipAddress.c_str(), &addr.sin_addr) != 1) {
-        std::cerr << "Invalid ip address format: " << IpAddress << std::endl;
-        close(sockfd);
-        return false;
-    }
-
-    memcpy(&ifr.ifr_addr, &addr, sizeof(struct sockaddr_in));
-
-    if(ioctl(sockfd, SIOCSIFADDR, &ifr) <0 ) {
-        std::cerr << "Failed to set IP address on device: " << device << std::endl;
-        close(sockfd);
-        return false;
-    }
-    std::cout << "IP address successfully set on device: " << device << std::endl;
-    close(sockfd);
-    return true;
-}   
-
-bool PacketCapture::OpenDevice() {
-    NetworkDescriptor = pcap_open_live(Device.c_str(), PACKET_SIZE, PROMISC, CAPTURE_READ_TIMEOUT_MS, ErrBuffer);
-    if (NetworkDescriptor == nullptr){
-        std::cerr << "Error opening Device" << ErrBuffer << std::endl;
-        return false;
-    }
-    return true;
 }
-
-bool PacketCapture::SetFilter(const std::string& FilterString) {
-    if (!NetworkDescriptor) {
-        std::cerr << "Device is not open" << std::endl;
-        return false;
-    }
-    struct bpf_program bpf_filter;
-    if(pcap_compile(NetworkDescriptor, &bpf_filter, FilterString.c_str(),0, PCAP_NETMASK_UNKNOWN) == -1) {
-        std::cerr << "Failed to compile filter: " << pcap_geterr(NetworkDescriptor) << std::endl;
-        pcap_freecode(&bpf_filter);
-        return false; 
-    }
-
-    if (pcap_setfilter(NetworkDescriptor, &bpf_filter) == -1) {
-        std::cerr << "Failed to set filter: " << pcap_geterr(NetworkDescriptor) << std::endl;
-        pcap_freecode(&bpf_filter);
-        return false;
-    }
-        
-    pcap_freecode(&bpf_filter);
-    std::cout << "Filter applied: " << FilterString << std::endl;
-    return true;
-}
+#endif
 
 bool PacketCapture::StartCapture(const std::string& FilterString) {
-    if  (OpenDevice() == false) {
+#ifdef MOCK_UP
+    // Start a thread to inject fake packets
+    std::thread injectorThread(&PacketCapture::InjectFakePackets, this);
+    injectorThread.detach();  // Let the thread run in the background
+    return true;
+#else
+    if (!OpenDevice()) {
         return false;
     }
-    if (SetFilter(FilterString) == false) {
+    if (!SetFilter(FilterString)) {
         return false;
     }
-    std::cout << "Starting capturing ETH packets on device " << Device << std::endl;
-    if(pcap_loop(NetworkDescriptor, CAPTURE_READ_TIMEOUT_MS, RecivePacketHandler, reinterpret_cast<uint8_t*>(this)) < 0) {
+    std::cout << "Starting capturing packets on device " << Device << std::endl;
+    if (pcap_loop(NetworkDescriptor, 0, RecivePacketHandler, reinterpret_cast<uint8_t*>(this)) < 0) {
         std::cerr << "Error capturing packets: " << pcap_geterr(NetworkDescriptor) << std::endl;
         return false;
     }
     return true;
+#endif
 }
 
-/* Store the packets in the Queue without udp header, just raw data (payload) */
+#ifndef MOCK_UP
+// Original packet handler for real mode
 void PacketCapture::RecivePacketHandler(uint8_t* GlobalData, const struct pcap_pkthdr* PacketHeader, const uint8_t* PacketData) {
     PacketRecived = true;
     std::cout << "Packet captured with length: " << PacketHeader->len << std::endl;
-    const uint8_t *PayloadData = PacketData + UDP_HEADER_LENGTH;
-    const size_t PayloadLen = PacketHeader -> len - 8; 
-    if (ReciveQueue.enqueue(PayloadData, PayloadLen)) 
-        std::cout << "Packet added to queue, length: " << PayloadLen << std::endl;
-    else
-        std::cerr << "Failed to enqueue packet, queue might be full." << std::endl;
-
+    const uint8_t* PayloadData = PacketData + UDP_HEADER_LENGTH;
+    const size_t PayloadLen = PacketHeader->len - UDP_HEADER_LENGTH;
+    if (ReciveQueue.enqueue(PayloadData, PayloadLen)) {
+        std::cout << "Packet added to queue, length: " << PayloadLen << " bytes." << std::endl;
+    } else {
+        std::cerr << "Failed to enqueue packet. Queue might be full." << std::endl;
+    }
 }
-
+#endif

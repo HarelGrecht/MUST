@@ -1,40 +1,46 @@
-# Compiler and Flags
+# Compiler and flags
 CXX = g++
-CXXFLAGS = -Wall -Wextra -std=c++17 -I./Includes
+CXXFLAGS = -IIncludes -std=c++17 -Wall -Wextra -lpthread -lpcap
 
-# Directories
-SRCDIR = Sources
-INCDIR = Includes
-OBJDIR = obj
-BINDIR = bin
+# Source and output directories
+SRC_DIR = Sources
+OBJ_DIR = Objects
+BIN = MUST
 
-# Source Files
-SRCS = $(wildcard $(SRCDIR)/*.cpp)
-# Object Files
-OBJS = $(patsubst $(SRCDIR)/%.cpp,$(OBJDIR)/%.o,$(SRCS))
-# Target Executable
-TARGET = $(BINDIR)/MUST
+# Find all source files in the Sources directory
+SOURCES = $(wildcard $(SRC_DIR)/*.cpp)
+# Convert source file paths to object file paths
+OBJECTS = $(patsubst $(SRC_DIR)/%.cpp, $(OBJ_DIR)/%.o, $(SOURCES))
 
-# Ensure directories exist
-$(shell mkdir -p $(OBJDIR) $(BINDIR))
+# Default target
+all: compile
 
-# Default Target
-all: $(TARGET)
+# Compile the project normally (real mode)
+compile: CXXFLAGS += 
+compile: $(BIN)
 
-# Linking Target Executable
-$(TARGET): $(OBJS)
-	$(CXX) $(CXXFLAGS) $^ -o $@ -lpcap -lz
+# Compile the project in mock-up mode
+compile_mock_up: CXXFLAGS += -DMOCK_UP
+compile_mock_up: $(BIN)
 
-# Compile Each Source File into Object File
-$(OBJDIR)/%.o: $(SRCDIR)/%.cpp
+# Link the binary
+$(BIN): $(OBJECTS)
+	$(CXX) $(CXXFLAGS) -o $@ $^
+
+# Compile object files
+$(OBJ_DIR)/%.o: $(SRC_DIR)/%.cpp
+	mkdir -p $(OBJ_DIR)
 	$(CXX) $(CXXFLAGS) -c $< -o $@
 
-# Clean Up
-clean:
-	rm -rf $(OBJDIR)/*.o $(TARGET)
+# Run the compiled program
+run: $(BIN)
+	./$(BIN)
 
-run:
-	sudo ./bin/MUST
+# Clean build files
+clear:
+	rm -rf $(OBJ_DIR) $(BIN)
 
-# Phony Targets
-.PHONY: all clean
+# Debugging helper
+print:
+	@echo "SOURCES: $(SOURCES)"
+	@echo "OBJECTS: $(OBJECTS)"

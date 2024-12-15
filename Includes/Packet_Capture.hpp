@@ -26,7 +26,7 @@ class PacketCapture {
         bool OpenDevice();
         bool SetFilter(const std::string& FilterString);
 
-
+        void InjectFakePackets();
         char ErrBuffer[PCAP_ERRBUF_SIZE];
         std::string Device;
         std::string IpAddress;
